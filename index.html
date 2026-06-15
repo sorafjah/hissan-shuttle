@@ -1,0 +1,986 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>ひっ算シャトルラン</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Google Fonts: Zen Maru Gothic (丸くて細長くない、ゼロに斜線のないUD系フォント) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700;900&display=swap" rel="stylesheet">
+  
+  <style>
+    body {
+      font-family: 'Zen Maru Gothic', sans-serif;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: manipulation;
+      background-color: #F0F9FF;
+    }
+    
+    /* 筆算の数字を完全に縦に揃える */
+    .tabular-numbers {
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* 紙吹雪アニメーション */
+    @keyframes fall {
+      0% { transform: translateY(-50px) rotate(0deg); opacity: 1; }
+      100% { transform: translateY(105vh) rotate(720deg); opacity: 0; }
+    }
+    .confetti-piece {
+      animation: fall 1.5s linear forwards;
+    }
+
+    /* シャトルランライトの点滅 */
+    @keyframes pulse-fast {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+    .animate-pulse-fast {
+      animation: pulse-fast 0.4s infinite;
+    }
+
+    /* スピンボタン（上下矢印）を隠す */
+    input[type="number"]::-webkit-inner-spin-button,
+    input[type="number"]::-webkit-outer-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+    input[type="number"] {
+      -moz-appearance: textfield;
+    }
+  </style>
+</head>
+<body class="text-[#1E293B] overflow-hidden w-screen h-screen">
+
+  <div id="root" class="w-full h-full"></div>
+
+  <!-- React & Babel CDN -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // --- Web Audio API 効果音システム ---
+    let audioCtx = null;
+
+    const initAudio = () => {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+    };
+
+    // シャトルランのカウント音（ピロリん）
+    const playPilorin = (pitchFactor = 1.0) => {
+      initAudio();
+      if (!audioCtx) return;
+
+      const now = audioCtx.currentTime;
+      
+      const osc1 = audioCtx.createOscillator();
+      const gain1 = audioCtx.createGain();
+      osc1.type = 'triangle';
+      osc1.frequency.setValueAtTime(329.63 * pitchFactor, now);
+      gain1.gain.setValueAtTime(0.12, now);
+      gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+      osc1.connect(gain1);
+      gain1.connect(audioCtx.destination);
+      osc1.start(now);
+      osc1.stop(now + 0.1);
+
+      const osc2 = audioCtx.createOscillator();
+      const gain2 = audioCtx.createGain();
+      osc2.type = 'triangle';
+      osc2.frequency.setValueAtTime(440.00 * pitchFactor, now + 0.06);
+      osc2.frequency.exponentialRampToValueAtTime(493.88 * pitchFactor, now + 0.25);
+      gain2.gain.setValueAtTime(0, now);
+      gain2.gain.setValueAtTime(0.15, now + 0.06);
+      gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+      osc2.connect(gain2);
+      gain2.connect(audioCtx.destination);
+      osc2.start(now + 0.06);
+      osc2.stop(now + 0.4);
+    };
+
+    // 正解音
+    const playCorrect = () => {
+      initAudio();
+      if (!audioCtx) return;
+      const now = audioCtx.currentTime;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(523.25, now);
+      osc.frequency.setValueAtTime(659.25, now + 0.08);
+      osc.frequency.setValueAtTime(783.99, now + 0.16);
+      osc.frequency.setValueAtTime(1046.50, now + 0.24);
+      gain.gain.setValueAtTime(0.15, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(now);
+      osc.stop(now + 0.5);
+    };
+
+    // 不正解・ロスト警告音
+    const playIncorrect = () => {
+      initAudio();
+      if (!audioCtx) return;
+      const now = audioCtx.currentTime;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(150, now);
+      osc.frequency.linearRampToValueAtTime(110, now + 0.35);
+      gain.gain.setValueAtTime(0.12, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(now);
+      osc.stop(now + 0.35);
+    };
+
+    // ゲームオーバー音
+    const playGameOverSound = () => {
+      initAudio();
+      if (!audioCtx) return;
+      const now = audioCtx.currentTime;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(260, now);
+      osc.frequency.linearRampToValueAtTime(130, now + 0.8);
+      gain.gain.setValueAtTime(0.15, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(now);
+      osc.stop(now + 0.8);
+    };
+
+    // --- 数値範囲選択用（△▽ボタン付きインプット） ---
+    function NumberSelector({ label, value, onChange, min = 1, max = 999 }) {
+      const handleIncrement = () => {
+        if (value < max) onChange(value + 1);
+      };
+      const handleDecrement = () => {
+        if (value > min) onChange(value - 1);
+      };
+      const handleInputChange = (e) => {
+        const val = parseInt(e.target.value);
+        if (!isNaN(val)) {
+          onChange(Math.min(max, Math.max(min, val)));
+        } else if (e.target.value === '') {
+          onChange(''); // 一時的な空入力を許可
+        }
+      };
+
+      return (
+        <div className="flex flex-col items-center">
+          <span className="text-sm font-bold text-slate-500 mb-1">{label}</span>
+          <div className="flex items-center bg-white border-2 border-sky-200 rounded-2xl overflow-hidden shadow-sm">
+            <button
+              onClick={handleDecrement}
+              className="px-4 py-2 bg-sky-50 text-sky-600 hover:bg-sky-100 font-black text-xl active:scale-95 transition-transform"
+            >
+              ▽
+            </button>
+            <input
+              type="number"
+              value={value}
+              onChange={handleInputChange}
+              onBlur={() => { if (value === '') onChange(min); }}
+              className="w-16 text-center font-black text-xl text-slate-700 outline-none tabular-numbers"
+            />
+            <button
+              onClick={handleIncrement}
+              className="px-4 py-2 bg-sky-50 text-sky-600 hover:bg-sky-100 font-black text-xl active:scale-95 transition-transform"
+            >
+              △
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // --- メインアプリケーションコンポーネント ---
+    function App() {
+      // --- 設定ステート ---
+      const [operator, setOperator] = useState('+'); // '+', '-', 'x'
+      const [upperMin, setUpperMin] = useState(10);
+      const [upperMax, setUpperMax] = useState(30);
+      const [lowerMin, setLowerMin] = useState(1);
+      const [lowerMax, setLowerMax] = useState(9);
+      const [showGridLine, setShowGridLine] = useState(false); // 位の補助線
+      const [baseInterval, setBaseInterval] = useState(1.5); // 音の間隔（秒）
+
+      // --- ゲーム進行ステート ---
+      const [gameState, setGameState] = useState('settings'); // 'settings', 'playing', 'gameover'
+      const [score, setScore] = useState(0);
+      const [bestScore, setBestScore] = useState(0);
+      const [lostCount, setLostCount] = useState(0); // 3回ロストで終了
+      const [speedLevel, setSpeedLevel] = useState(1);
+      const [currentInterval, setCurrentInterval] = useState(1.5);
+
+      // --- 問題管理ステート ---
+      const [currentQuestion, setCurrentQuestion] = useState(null);
+      const [userInput, setUserInput] = useState([]); // 一の位から順に入る配列
+      const [activeDigitIndex, setActiveDigitIndex] = useState(0); // 現在入力中の桁
+      const [beatCount, setBeatCount] = useState(0); // カウント (0〜10)
+      const [showHint, setShowHint] = useState(false);
+      const [hasHint, setHasHint] = useState(false);
+      const [subHints, setSubHints] = useState({ slashed: [], reducedVal: [], borrowTop: [] });
+
+      // --- ビジュアルエフェクト ---
+      const [showSuccess, setShowSuccess] = useState(false);
+      const [flashRed, setFlashRed] = useState(false);
+
+      // かけ算選択時の下の段桁数制限
+      useEffect(() => {
+        if (operator === 'x') {
+          if (lowerMax > 9) setLowerMax(9);
+          if (lowerMin > 9) setLowerMin(9);
+        }
+      }, [operator]);
+
+      // --- ひき算の繰り下がりヒントシミュレーション ---
+      const calculateSubHints = (num1, num2, digits) => {
+        const str1 = num1.toString().split('').reverse();
+        const str2 = num2.toString().split('').reverse();
+        
+        const slashed = Array(digits).fill(false);
+        const reducedVal = Array(digits).fill(null);
+        const borrowTop = Array(digits).fill(null);
+        
+        let tempA = [...str1].map(x => parseInt(x || '0'));
+        
+        for (let i = 0; i < digits; i++) {
+          const d1 = tempA[i];
+          const d2 = parseInt(str2[i] || '0');
+          
+          if (d1 < d2) {
+            borrowTop[i] = 10;
+            let j = i + 1;
+            while (j < digits) {
+              slashed[j] = true;
+              if (tempA[j] > 0) {
+                tempA[j] -= 1;
+                reducedVal[j] = tempA[j];
+                break;
+              } else {
+                tempA[j] = 9;
+                reducedVal[j] = 9;
+                j++;
+              }
+            }
+          }
+        }
+        return { slashed, reducedVal, borrowTop };
+      };
+
+      // --- 繰り上がり・繰り下がり判定 ---
+      const analyzeQuestion = (num1, num2, op, digits) => {
+        const str1 = num1.toString().split('').reverse();
+        const str2 = num2.toString().split('').reverse();
+        
+        let hasCarryOrBorrow = false;
+        let carryInfo = Array(digits).fill(0);
+        let subHintsObj = { slashed: [], reducedVal: [], borrowTop: [] };
+        
+        if (op === '+') {
+          let carry = 0;
+          for (let i = 0; i < digits; i++) {
+            const d1 = parseInt(str1[i] || '0');
+            const d2 = parseInt(str2[i] || '0');
+            const sum = d1 + d2 + carry;
+            if (sum >= 10) {
+              carry = Math.floor(sum / 10);
+              if (i + 1 < digits) {
+                carryInfo[i + 1] = carry;
+                hasCarryOrBorrow = true;
+              }
+            } else {
+              carry = 0;
+            }
+          }
+        } else if (op === '-') {
+          subHintsObj = calculateSubHints(num1, num2, digits);
+          hasCarryOrBorrow = subHintsObj.slashed.some(x => x === true);
+        } else if (op === 'x') {
+          const multiplier = num2;
+          let carry = 0;
+          for (let i = 0; i < digits; i++) {
+            const d1 = parseInt(str1[i] || '0');
+            const prod = d1 * multiplier + carry;
+            if (prod >= 10) {
+              carry = Math.floor(prod / 10);
+              if (i + 1 < digits) {
+                carryInfo[i + 1] = carry;
+                hasCarryOrBorrow = true;
+              }
+            } else {
+              carry = 0;
+            }
+          }
+        }
+        
+        return { hasCarryOrBorrow, carryInfo, subHintsObj };
+      };
+
+      // --- 新しい問題の生成 ---
+      const generateQuestion = () => {
+        let uMin = parseInt(upperMin) || 10;
+        let uMax = parseInt(upperMax) || 30;
+        let lMin = parseInt(lowerMin) || 1;
+        let lMax = parseInt(lowerMax) || 9;
+
+        if (uMin > uMax) [uMin, uMax] = [uMax, uMin];
+        if (lMin > lMax) [lMin, lMax] = [lMax, lMin];
+
+        let num1 = Math.floor(Math.random() * (uMax - uMin + 1)) + uMin;
+        let num2 = Math.floor(Math.random() * (lMax - lMin + 1)) + lMin;
+
+        if (operator === '-' && num1 < num2) {
+          [num1, num2] = [num2, num1];
+        }
+
+        let answer = 0;
+        if (operator === '+') answer = num1 + num2;
+        if (operator === '-') answer = num1 - num2;
+        if (operator === 'x') answer = num1 * num2;
+
+        const maxDigits = Math.max(
+          num1.toString().length,
+          num2.toString().length,
+          answer.toString().length
+        );
+
+        const { hasCarryOrBorrow, carryInfo, subHintsObj } = analyzeQuestion(num1, num2, operator, maxDigits);
+
+        setHasHint(hasCarryOrBorrow);
+        setShowHint(false);
+        setSubHints(subHintsObj);
+
+        setCurrentQuestion({
+          num1,
+          num2,
+          operator,
+          answer,
+          maxDigits,
+          carryInfo
+        });
+
+        setUserInput(Array(maxDigits).fill(''));
+        setActiveDigitIndex(0);
+        setBeatCount(0);
+      };
+
+      // --- ゲームスタート ---
+      const startGame = () => {
+        initAudio();
+        setScore(0);
+        setLostCount(0);
+        setSpeedLevel(1);
+        setCurrentInterval(baseInterval);
+        setGameState('playing');
+        
+        setTimeout(() => {
+          generateQuestion();
+        }, 100);
+      };
+
+      // --- タイマーループ (シャトルラン進行) ---
+      useEffect(() => {
+        if (gameState !== 'playing' || showSuccess || !currentQuestion) {
+          return;
+        }
+
+        let timerId = null;
+
+        const tick = () => {
+          setBeatCount(prev => {
+            const next = prev + 1;
+            
+            if (next <= 10) {
+              // 音がだんだん高くなる
+              playPilorin(1.0 + (next - 1) * 0.05);
+              timerId = setTimeout(tick, currentInterval * 1000);
+              return next;
+            } else {
+              // 10カウントが完了しても答えられなかった ＝ ロスト
+              handleTimeout();
+              return 0;
+            }
+          });
+        };
+
+        timerId = setTimeout(tick, currentInterval * 1000);
+
+        return () => {
+          if (timerId) clearTimeout(timerId);
+        };
+      }, [gameState, currentQuestion, currentInterval, showSuccess]);
+
+      // スピードレベル（音の間隔）の追従
+      useEffect(() => {
+        if (gameState === 'playing') {
+          const calculated = baseInterval * Math.pow(0.92, speedLevel - 1);
+          setCurrentInterval(Math.max(0.4, calculated));
+        }
+      }, [speedLevel, baseInterval, gameState]);
+
+      // --- タイムアウト（時間切れ）処理 ---
+      const handleTimeout = () => {
+        playIncorrect();
+        setFlashRed(true);
+        setTimeout(() => setFlashRed(false), 500);
+
+        setLostCount(prev => {
+          const next = prev + 1;
+          if (next >= 3) {
+            setTimeout(() => {
+              playGameOverSound();
+              setGameState('gameover');
+            }, 400);
+          } else {
+            // タイムアウトしたタイミングで次の問題から少しスピードを上げる
+            setSpeedLevel(lvl => lvl + 1);
+            setTimeout(() => {
+              generateQuestion();
+            }, 800);
+          }
+          return next;
+        });
+      };
+
+      // --- テンキー入力処理 ---
+      const handleNumberInput = (num) => {
+        if (!currentQuestion) return;
+        
+        setUserInput(prev => {
+          const nextInput = [...prev];
+          nextInput[activeDigitIndex] = num.toString();
+          return nextInput;
+        });
+
+        // 桁を左側へ進める
+        if (activeDigitIndex < currentQuestion.maxDigits - 1) {
+          setActiveDigitIndex(prev => prev + 1);
+        }
+      };
+
+      // けすキー
+      const handleClear = () => {
+        setUserInput(prev => {
+          const nextInput = [...prev];
+          if (nextInput[activeDigitIndex] === '' && activeDigitIndex > 0) {
+            const nextActive = activeDigitIndex - 1;
+            setActiveDigitIndex(nextActive);
+            nextInput[nextActive] = '';
+          } else {
+            nextInput[activeDigitIndex] = '';
+          }
+          return nextInput;
+        });
+      };
+
+      // できた！キー（答え合わせ）
+      const handleCheckAnswer = () => {
+        if (!currentQuestion) return;
+
+        let userAnsNum = 0;
+        let hasInput = false;
+        for (let i = 0; i < currentQuestion.maxDigits; i++) {
+          const val = userInput[i];
+          if (val !== '') {
+            hasInput = true;
+            userAnsNum += parseInt(val) * Math.pow(10, i);
+          }
+        }
+
+        if (!hasInput) return;
+
+        if (userAnsNum === currentQuestion.answer) {
+          // 正解
+          playCorrect();
+          setShowSuccess(true);
+          setScore(prev => {
+            const next = prev + 1;
+            if (next > bestScore) setBestScore(next);
+            return next;
+          });
+
+          setTimeout(() => {
+            setShowSuccess(false);
+            // 正解したら次の問題へ（スピードレベルは変更なし）
+            generateQuestion();
+          }, 1000);
+        } else {
+          // 不正解時は問題は変えずに、警告音と画面赤フラッシュのみ（ロストにはしない）
+          playIncorrect();
+          setFlashRed(true);
+          setTimeout(() => setFlashRed(false), 400);
+        }
+      };
+
+      // 筆算部分のレンダリング
+      const renderQuestionColumns = () => {
+        if (!currentQuestion) return null;
+        const { num1, num2, maxDigits } = currentQuestion;
+        
+        const d1 = num1.toString().split('').reverse();
+        const d2 = num2.toString().split('').reverse();
+
+        const columns = [{ type: 'operator' }];
+        for (let i = maxDigits - 1; i >= 0; i--) {
+          columns.push({ type: 'digit', index: i });
+        }
+
+        const borderClass = showGridLine ? 'border-r-2 border-dashed border-sky-100' : '';
+
+        return (
+          <div className="flex flex-col items-center tabular-numbers w-full">
+            {/* 1. ヒント用スペース行 */}
+            <div className="grid w-full" style={{ gridTemplateColumns: `40px repeat(${maxDigits}, 1fr)` }}>
+              <div />
+              {columns.slice(1).map((col, idx) => {
+                const i = col.index;
+                let hintText = '';
+                if (showHint) {
+                  if (operator === '+') {
+                    if (currentQuestion.carryInfo[i] > 0) hintText = currentQuestion.carryInfo[i];
+                  } else if (operator === '-') {
+                    if (subHints.borrowTop[i]) hintText = subHints.borrowTop[i];
+                    else if (subHints.reducedVal[i] !== null) hintText = subHints.reducedVal[i];
+                  } else if (operator === 'x') {
+                    if (currentQuestion.carryInfo[i] > 0) hintText = currentQuestion.carryInfo[i];
+                  }
+                }
+
+                return (
+                  <div
+                    key={idx}
+                    className={`h-8 flex items-end justify-center text-[#10B981] font-black text-2xl pb-0.5 ${idx < maxDigits - 1 ? borderClass : ''}`}
+                  >
+                    {hintText}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* 2. 上の段 */}
+            <div className="grid w-full" style={{ gridTemplateColumns: `40px repeat(${maxDigits}, 1fr)` }}>
+              <div />
+              {columns.slice(1).map((col, idx) => {
+                const i = col.index;
+                const val = d1[i] || '';
+                const isSlashed = showHint && operator === '-' && subHints.slashed[i];
+
+                return (
+                  <div
+                    key={idx}
+                    className={`h-14 flex items-center justify-center text-5xl font-black relative ${idx < maxDigits - 1 ? borderClass : ''}`}
+                  >
+                    {val && (
+                      <div className="relative">
+                        <span className={isSlashed ? 'text-slate-300' : 'text-slate-800'}>{val}</span>
+                        {isSlashed && (
+                          <svg className="absolute -inset-2 w-[140%] h-[140%] pointer-events-none" viewBox="0 0 100 100" preserveAspectRatio="none">
+                            <line x1="15" y1="85" x2="85" y2="15" stroke="#EF4444" strokeWidth="5" strokeLinecap="round" />
+                          </svg>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* 3. 下の段 */}
+            <div className="grid w-full" style={{ gridTemplateColumns: `40px repeat(${maxDigits}, 1fr)` }}>
+              <div className="h-14 flex items-center justify-center text-4xl font-black text-sky-500">
+                {operator === 'x' ? '×' : operator === '+' ? '＋' : '－'}
+              </div>
+              {columns.slice(1).map((col, idx) => {
+                const i = col.index;
+                const val = d2[i] || '';
+
+                return (
+                  <div
+                    key={idx}
+                    className={`h-14 flex items-center justify-center text-5xl font-black text-slate-800 ${idx < maxDigits - 1 ? borderClass : ''}`}
+                  >
+                    {val}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* 4. 横線 */}
+            <div className="w-full border-b-8 border-slate-700 my-2 rounded-full" />
+
+            {/* 5. 解答欄ボックス */}
+            <div className="grid w-full" style={{ gridTemplateColumns: `40px repeat(${maxDigits}, 1fr)` }}>
+              <div />
+              {columns.slice(1).map((col, idx) => {
+                const i = col.index;
+                const val = userInput[i];
+                const isActive = activeDigitIndex === i;
+
+                return (
+                  <div
+                    key={idx}
+                    onClick={() => setActiveDigitIndex(i)}
+                    className={`h-18 flex items-center justify-center p-0.5 cursor-pointer ${idx < maxDigits - 1 ? borderClass : ''}`}
+                  >
+                    <div
+                      className={`w-14 h-14 rounded-xl flex items-center justify-center text-4xl font-black transition-all duration-150 ${
+                        isActive
+                          ? 'bg-sky-100 border-4 border-sky-500 text-sky-700 scale-105 shadow-sm'
+                          : 'bg-white border-2 border-slate-300 text-slate-700 hover:bg-slate-50'
+                      }`}
+                    >
+                      {val}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      };
+
+      return (
+        <div className="w-full h-full flex flex-col justify-between p-4 relative overflow-hidden">
+          
+          {/* 警告用赤フラッシュ */}
+          {flashRed && (
+            <div className="absolute inset-0 bg-red-500/15 pointer-events-none z-50 transition-opacity duration-300" />
+          )}
+
+          {/* 正解アニメーション */}
+          {showSuccess && (
+            <>
+              <div className="absolute inset-0 flex items-center justify-center bg-emerald-500/10 z-40 pointer-events-none">
+                <div className="bg-white border-8 border-emerald-400 text-emerald-500 font-black text-5xl px-12 py-6 rounded-full shadow-2xl scale-125 animate-ping">
+                  せいかい！✨
+                </div>
+              </div>
+              <div className="absolute inset-0 pointer-events-none overflow-hidden z-40">
+                {Array.from({ length: 30 }).map((_, i) => {
+                  const left = Math.random() * 100;
+                  const delay = Math.random() * 0.4;
+                  const duration = 1.0 + Math.random() * 0.8;
+                  const size = 12 + Math.random() * 14;
+                  const colors = ['bg-[#FF8A8A]', 'bg-[#FFD93D]', 'bg-[#6BCB77]', 'bg-[#4D96FF]', 'bg-[#FF9F43]'];
+                  const color = colors[Math.floor(Math.random() * colors.length)];
+                  return (
+                    <div
+                      key={i}
+                      className={`absolute rounded-sm ${color} confetti-piece`}
+                      style={{
+                        left: `${left}%`,
+                        top: `-10%`,
+                        width: `${size}px`,
+                        height: `${size}px`,
+                        transform: `rotate(${Math.random() * 360}deg)`,
+                        animationDelay: `${delay}s`,
+                        animationDuration: `${duration}s`
+                      }}
+                    />
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          {/* --- 1. 設定画面 --- */}
+          {gameState === 'settings' && (
+            <div className="flex-1 flex flex-col justify-center items-center max-w-xl mx-auto w-full">
+              <div className="bg-white rounded-3xl shadow-xl border-4 border-sky-300 p-8 w-full">
+                
+                <div className="text-center mb-6">
+                  <h1 className="text-3xl font-black text-sky-600 tracking-wider">
+                    🏃‍♂️ ひっ算シャトルラン
+                  </h1>
+                </div>
+
+                <div className="space-y-6">
+                  {/* 計算の種類（すべて青系で統一） */}
+                  <div>
+                    <label className="block text-md font-bold text-slate-600 mb-2 text-center">けいさんの しゅるい</label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {[
+                        { op: '+', label: 'たし算 ＋', color: 'border-sky-500 text-sky-600 bg-sky-50' },
+                        { op: '-', label: 'ひき算 －', color: 'border-sky-500 text-sky-600 bg-sky-50' },
+                        { op: 'x', label: 'かけ算 ×', color: 'border-sky-500 text-sky-600 bg-sky-50' }
+                      ].map(item => (
+                        <button
+                          key={item.op}
+                          onClick={() => setOperator(item.op)}
+                          className={`py-3 px-2 rounded-2xl border-4 font-black text-lg transition-all ${
+                            operator === item.op 
+                              ? `${item.color} scale-105 shadow-sm` 
+                              : 'border-slate-100 text-slate-400 bg-slate-50 hover:bg-slate-100'
+                          }`}
+                        >
+                          {item.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* 数の範囲設定（△▽スピンボタン付き） */}
+                  <div className="grid grid-cols-2 gap-6">
+                    <div className="space-y-3 bg-sky-50/50 p-4 rounded-2xl border-2 border-sky-100">
+                      <h3 className="text-sm font-black text-sky-700 text-center border-b border-sky-100 pb-1">上の段</h3>
+                      <NumberSelector label="さいしょう" value={upperMin} onChange={setUpperMin} min={1} max={999} />
+                      <NumberSelector label="さいだい" value={upperMax} onChange={setUpperMax} min={1} max={999} />
+                    </div>
+
+                    <div className="space-y-3 bg-sky-50/50 p-4 rounded-2xl border-2 border-sky-100">
+                      <h3 className="text-sm font-black text-sky-700 text-center border-b border-sky-100 pb-1">下の段</h3>
+                      <NumberSelector label="さいしょう" value={lowerMin} onChange={setLowerMin} min={1} max={operator === 'x' ? 9 : 999} />
+                      <NumberSelector label="さいだい" value={lowerMax} onChange={setLowerMax} min={1} max={operator === 'x' ? 9 : 999} />
+                    </div>
+                  </div>
+
+                  {/* 補助線 & 音の間隔 */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-bold text-slate-500 mb-2 text-center">位の補助線</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          onClick={() => setShowGridLine(true)}
+                          className={`py-2 rounded-xl border-2 font-bold text-sm transition-all ${
+                            showGridLine 
+                              ? 'border-sky-500 text-sky-600 bg-sky-50' 
+                              : 'border-slate-100 text-slate-400 bg-slate-50 hover:bg-slate-100'
+                          }`}
+                        >
+                          だす
+                        </button>
+                        <button
+                          onClick={() => setShowGridLine(false)}
+                          className={`py-2 rounded-xl border-2 font-bold text-sm transition-all ${
+                            !showGridLine 
+                              ? 'border-sky-500 text-sky-600 bg-sky-50' 
+                              : 'border-slate-100 text-slate-400 bg-slate-50 hover:bg-slate-100'
+                          }`}
+                        >
+                          なし
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col items-center">
+                      <label className="block text-sm font-bold text-slate-500 mb-1">おとの間隔</label>
+                      <span className="font-bold text-sky-600 text-sm mb-1">{baseInterval} 秒</span>
+                      <input
+                        type="range"
+                        min="0.8"
+                        max="3.0"
+                        step="0.1"
+                        value={baseInterval}
+                        onChange={(e) => setBaseInterval(parseFloat(e.target.value))}
+                        className="w-full accent-sky-500 h-2 bg-slate-200 rounded-lg cursor-pointer"
+                      />
+                    </div>
+                  </div>
+
+                </div>
+
+                <button
+                  onClick={startGame}
+                  className="w-full mt-6 py-4 bg-sky-500 hover:bg-sky-600 text-white font-black text-2xl rounded-2xl shadow-md border-b-8 border-sky-700 transition-all transform hover:-translate-y-0.5 active:translate-y-0"
+                >
+                  スタート！
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* --- 2. ゲーム画面 --- */}
+          {gameState === 'playing' && (
+            <div className="flex-1 flex flex-col justify-between h-full max-w-xl mx-auto w-full">
+              
+              {/* ヘッダー */}
+              <div className="flex items-center justify-between bg-white rounded-2xl shadow-sm px-6 py-2.5 border-2 border-sky-100 flex-shrink-0">
+                <button
+                  onClick={() => setGameState('settings')}
+                  className="text-slate-400 hover:text-slate-600 font-bold flex items-center space-x-1"
+                >
+                  ⚙️ 設定
+                </button>
+
+                <div className="text-center">
+                  <span className="text-slate-400 font-bold text-[10px] block leading-none mb-1">スコア</span>
+                  <span className="text-2xl font-black text-sky-600">{score} <span className="text-xs font-bold text-slate-500">問</span></span>
+                </div>
+
+                {/* ライフ */}
+                <div className="flex space-x-1">
+                  {[1, 2, 3].map(heartIdx => (
+                    <div key={heartIdx} className="transition-transform duration-300">
+                      {heartIdx <= (3 - lostCount) ? (
+                        <svg className="w-7 h-7 text-rose-500 filter drop-shadow-sm" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M3.172 5.172a4 4 0 015.656 0L10 6.343l1.172-1.171a4 4 0 115.656 5.656L10 17.657l-6.828-6.829a4 4 0 010-5.656z" clipRule="evenodd" />
+                        </svg>
+                      ) : (
+                        <svg className="w-7 h-7 text-slate-200" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M3.172 5.172a4 4 0 015.656 0L10 6.343l1.172-1.171a4 4 0 115.656 5.656L10 17.657l-6.828-6.829a4 4 0 010-5.656z" clipRule="evenodd" />
+                        </svg>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* メイン解答エリア (iPadの様々なサイズにフィットするよう上下マージンを小さく) */}
+              <div className="flex-1 flex flex-col justify-center items-center py-2 space-y-3 min-h-0">
+                
+                {/* 10個の長方形シャトルランゲージ */}
+                <div className="w-full bg-white/60 p-2 rounded-2xl border border-sky-100/50 shadow-sm flex-shrink-0">
+                  <div className="grid grid-cols-10 gap-1.5 w-full">
+                    {Array.from({ length: 10 }).map((_, idx) => {
+                      const lightNum = idx + 1;
+                      const isLit = beatCount >= lightNum;
+                      
+                      let colorClass = 'bg-slate-200';
+                      if (isLit) {
+                        if (lightNum <= 4) colorClass = 'bg-[#10B981]'; // 緑
+                        else if (lightNum <= 7) colorClass = 'bg-[#F59E0B]'; // 黄色
+                        else colorClass = 'bg-[#EF4444] animate-pulse-fast'; // 赤
+                      }
+
+                      return (
+                        <div
+                          key={idx}
+                          className={`h-3 rounded-full transition-all duration-150 ${colorClass}`}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 筆算 ＆ ヒントボタン */}
+                <div className="relative flex items-center justify-center w-full min-h-0">
+                  
+                  {/* 左側に固定表示するヒントボタン（位置ズレや揺れを一切排除） */}
+                  {hasHint && (
+                    <div className="absolute left-0 lg:-left-20 top-1/2 -translate-y-1/2 z-10">
+                      <button
+                        onClick={() => setShowHint(!showHint)}
+                        className={`flex flex-col items-center justify-center w-16 h-16 rounded-2xl border-4 font-black transition-all ${
+                          showHint
+                            ? 'border-[#10B981] bg-emerald-50 text-[#10B981]'
+                            : 'border-amber-400 bg-amber-50 text-amber-500'
+                        }`}
+                      >
+                        <span className="text-2xl">💡</span>
+                        <span className="text-[10px]">ヒント</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {/* 筆算 */}
+                  <div className="bg-white rounded-3xl border-4 border-sky-100 shadow-lg px-10 py-4 min-w-[260px] max-w-full">
+                    {renderQuestionColumns()}
+                  </div>
+                </div>
+
+              </div>
+
+              {/* 3x4に完璧に整理されたテンキー操作パネル (見切れないように高さを14%前後に最適化) */}
+              <div className="bg-white/60 backdrop-blur-sm rounded-3xl p-3 border-2 border-sky-100/50 shadow-md flex-shrink-0">
+                <div className="grid grid-cols-3 gap-2 max-w-sm mx-auto">
+                  {/* 1〜9 のキー */}
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(num => (
+                    <button
+                      key={num}
+                      onClick={() => handleNumberInput(num)}
+                      className="h-12 bg-white hover:bg-slate-50 border-b-4 border-slate-300 rounded-xl text-2xl font-black text-slate-700 active:translate-y-0.5 active:border-b-2"
+                    >
+                      {num}
+                    </button>
+                  ))}
+
+                  {/* 最下部一列：けす・0・できた！ */}
+                  <button
+                    onClick={handleClear}
+                    className="h-12 bg-rose-400 hover:bg-rose-500 text-white rounded-xl text-lg font-black border-b-4 border-rose-600 active:translate-y-0.5 active:border-b-2"
+                  >
+                    けす
+                  </button>
+
+                  <button
+                    onClick={() => handleNumberInput(0)}
+                    className="h-12 bg-white hover:bg-slate-50 border-b-4 border-slate-300 rounded-xl text-2xl font-black text-slate-700 active:translate-y-0.5 active:border-b-2"
+                  >
+                    0
+                  </button>
+
+                  <button
+                    onClick={handleCheckAnswer}
+                    className="h-12 bg-sky-500 hover:bg-sky-600 text-white rounded-xl text-lg font-black border-b-4 border-sky-700 active:translate-y-0.5 active:border-b-2"
+                  >
+                    できた!
+                  </button>
+                </div>
+              </div>
+
+            </div>
+          )}
+
+          {/* --- 3. ゲームオーバー画面 --- */}
+          {gameState === 'gameover' && (
+            <div className="flex-1 flex flex-col justify-center items-center max-w-md mx-auto w-full">
+              <div className="bg-white rounded-3xl shadow-xl border-8 border-rose-100 p-8 w-full text-center">
+                
+                <h1 className="text-3xl font-black text-rose-500 mb-2">おしまい！</h1>
+                
+                <div className="bg-rose-50/50 rounded-2xl p-6 mb-6 border border-rose-100">
+                  <div className="text-5xl font-black text-slate-700">
+                    {score} <span className="text-xl font-bold">もん せいかい！</span>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <button
+                    onClick={startGame}
+                    className="w-full py-4 bg-sky-500 text-white text-xl font-black rounded-2xl shadow-md border-b-4 border-sky-700 transition-all"
+                  >
+                    もう一回やる！🔄
+                  </button>
+                  <button
+                    onClick={() => setGameState('settings')}
+                    className="w-full py-3 bg-slate-100 text-slate-500 text-lg font-black rounded-2xl transition-all"
+                  >
+                    設定にもどる⚙️
+                  </button>
+                </div>
+
+              </div>
+            </div>
+          )}
+
+        </div>
+      );
+    }
+
+    const container = document.getElementById('root');
+    const root = ReactDOM.createRoot(container);
+    root.render(<App />);
+  </script>
+</body>
+</html>
