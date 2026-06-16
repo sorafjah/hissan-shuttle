@@ -401,7 +401,7 @@
         if (gameState === 'playing') {
           const currentLvl = isSpeedUp ? speedLevel : 1;
           const calculated = baseInterval * Math.pow(0.92, currentLvl - 1);
-          setCurrentInterval(Math.max(0.4, calculated));
+          setCurrentInterval(Math.max(1.0, calculated));
         }
       }, [speedLevel, baseInterval, gameState, isSpeedUp]);
 
